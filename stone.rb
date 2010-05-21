@@ -2,6 +2,7 @@ require File.join(File.dirname(__FILE__), 'gemstone_installation')
 require File.join(File.dirname(__FILE__), 'topaz')
 
 require 'date'
+require 'tempfile'
 
 class Stone
   attr_accessor :username, :password
@@ -81,7 +82,13 @@ class Stone
 
   def start
     # Startstone can use single or double quotes around the stone name, so check for either (Yucch)
-    gs_sh "startstone -z #{system_config_filename} -l #{File.join(log_directory, @name)}.log #{@name} | grep Info]:.*[\\\'\\\"]#{@name}"
+    #
+    # Trac 528: The original code here did gs_sh "startstone ... | grep ..."
+    # The problem is that if startstone fails, gs_sh returns the exit status of the last
+    # process in the pipeline (grep) which is 0, hiding the error from startstone.
+    # The simplest fix is to simply not filter the startstone output...
+    #gs_sh "startstone -z #{system_config_filename} -l #{File.join(log_directory, @name)}.log #{@name} | grep Info]:.*[\\\'\\\"]#{@name}"
+    gs_sh "startstone -z #{system_config_filename} -l #{File.join(log_directory, @name)}.log #{@name}"
     running?(10)
     self
   end
@@ -244,6 +251,30 @@ class Stone
                 "output pop",
                 "exit")
     Topaz.new(self).commands(commands)
+  end
+
+  def run_string(commands, login_first=true)
+    cmds = Tempfile.new('topaz_commands')
+    begin
+      cmds << "output append #{topaz_logfile}\n"
+      if login_first
+        cmds << "set u #{username} p #{password} gemstone #{name}\n"
+        cmds << "login\n"
+      end
+      cmds << "limit oops 100\n"
+      cmds << "limit bytes 1000\n"
+      cmds << "display oops\n"
+      cmds << "iferr 1 stack\n"
+      cmds << "iferr 2 exit 3\n"
+      cmds << commands
+      cmds << "output pop\n"
+      cmds << "exit\n"
+      cmds.close
+      Topaz.new(self).run_string(cmds, login_first)
+    ensure
+      cmds.unlink if cmds
+    end
+
   end
 
   private
